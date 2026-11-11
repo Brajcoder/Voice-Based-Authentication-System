@@ -81,8 +81,30 @@ Open your browser at `http://127.0.0.1:5000`.
    - Computes 1st order (delta) and 2nd order (delta-delta) temporal velocity/acceleration features.
    - Computes vocal-tract acoustic statistics (spectral centroid, bandwidth, rolloff, zero-crossing rate).
 
-3. **CNN Embedding (`ml/model.py`):**
-   - Deep Convolutional Neural Network processes multi-channel spectral features.
-   - Temporal Statistical Pooling aggregates mean and variance across time frames for length invariance.
-   - Projects representation into an L2-normalized 128-dimensional biometric embedding.
-   - Verification uses cosine similarity metric with matching threshold $\ge 0.82$.
+3. **Resemblyzer Voice Embedding (`ml/model.py`):**
+   - Deep Voice Encoder (d-vector architecture) extracts speaker identity representations.
+   - Outputs a normalized 256-dimensional biometric embedding vector.
+   - Verification uses cosine similarity scoring with an optimal EER threshold of $\ge 0.6993$ ($\approx 0.70$).
+
+---
+
+## Biometric Evaluation & EER Benchmark
+
+To run the Equal Error Rate (EER) evaluation comparing the models on VoxCeleb:
+
+```bash
+python -m ml.evaluate
+```
+
+### Benchmark Results (7,140 Pairwise Comparisons)
+
+| Metric | Resemblyzer (d-vector) | VoiceEmbeddingCNN |
+| :--- | :---: | :---: |
+| **Equal Error Rate (EER)** | **`3.00%`** | `10.33%` |
+| **Area Under ROC (AUC-ROC)** | **`0.9961`** | `0.9519` |
+| **Optimal EER Threshold** | **`0.6993`** | `0.9451` |
+| **Mean Genuine Score** | `0.8671` | `0.9673` |
+| **Mean Impostor Score** | `0.5807` | `0.8885` |
+| **Separation Margin** | **`+0.2864`** | `+0.0788` |
+| **Inference Latency** | `27.1 ms` | **`16.1 ms`** |
+

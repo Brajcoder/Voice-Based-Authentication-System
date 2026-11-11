@@ -38,6 +38,7 @@ pooch==1.9.0
 pycparser==3.12
 PyYAML==6.0.3
 requests==2.34.2
+Resemblyzer==0.1.4
 ruamel.yaml==0.18.17
 ruamel.yaml.clib==0.2.15
 scikit-learn==1.9.1
@@ -55,4 +56,5 @@ tqdm==4.70.1
 truststore==0.10.5
 typing_extensions==4.16.0
 urllib3==2.8.0
+webrtcvad-wheels==2.0.14.post1
 Werkzeug==3.1.9
