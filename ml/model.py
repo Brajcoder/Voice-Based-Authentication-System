@@ -109,47 +109,39 @@ def get_model() -> VoiceEmbeddingCNN:
     return _MODEL_INSTANCE
 
 
+from resemblyzer import VoiceEncoder, preprocess_wav
+
+_VOICE_ENCODER_INSTANCE: VoiceEncoder | None = None
+
+
+def get_voice_encoder() -> VoiceEncoder:
+    """Return or initialize the singleton Resemblyzer VoiceEncoder model."""
+    global _VOICE_ENCODER_INSTANCE
+    if _VOICE_ENCODER_INSTANCE is None:
+        _VOICE_ENCODER_INSTANCE = VoiceEncoder()
+    return _VOICE_ENCODER_INSTANCE
+
+
 def extract_embedding(signal: np.ndarray, sr: int = 16000) -> np.ndarray:
     """
-    Extract a normalized 128-dimensional speaker embedding from a cleaned audio signal.
-    Combines deep convolutional feature representations with vocal tract acoustic statistics.
-
-    Args:
-        signal: 1D float32 numpy array.
-        sr: Sample rate.
-
-    Returns:
-        1D float32 numpy array of length 128 with unit norm.
+    Extract a normalized 256-dimensional speaker embedding using Resemblyzer VoiceEncoder.
     """
-    # 1. Compute MFCCs with deltas: shape (120, time_frames)
-    feat = extract_mfcc(signal, sr=sr, n_mfcc=40, include_deltas=True)
-    # Reshape into (channels=3, n_mfcc=40, time_frames)
-    mfcc = feat[0:40, :]
-    delta = feat[40:80, :]
-    delta2 = feat[80:120, :]
-    tensor_input = np.stack([mfcc, delta, delta2], axis=0)  # (3, 40, T)
+    encoder = get_voice_encoder()
+    try:
+        wav = preprocess_wav(signal, source_sr=sr)
+    except Exception:
+        wav = signal
 
-    # Convert to torch tensor with batch dimension (1, 3, 40, T)
-    x = torch.from_numpy(tensor_input).unsqueeze(0).float()
+    if len(wav) == 0:
+        wav = signal
 
-    model = get_model()
-    with torch.no_grad():
-        cnn_out = model(x)
+    embedding = encoder.embed_utterance(wav)
+    embedding = np.asarray(embedding, dtype=np.float32)
 
-    cnn_emb = cnn_out.squeeze(0).cpu().numpy().astype(np.float32)
-
-    # 2. Extract acoustic vocal tract statistics (8-d)
-    stats = extract_acoustic_stats(signal, sr=sr)
-    stats_norm = (stats - np.mean(stats)) / (np.std(stats) + 1e-8)
-
-    # Combine: 120-d CNN features + 8-d acoustic descriptors = 128-d voice embedding
-    combined = np.concatenate([cnn_emb[:120], stats_norm[:8]], axis=0).astype(np.float32)
-
-    # Unit L2 normalization
-    norm = np.linalg.norm(combined)
+    norm = np.linalg.norm(embedding)
     if norm > 1e-6:
-        combined = combined / norm
-    return combined
+        embedding = embedding / norm
+    return embedding
 
 
 def compute_similarity(embedding1: np.ndarray, embedding2: np.ndarray) -> float:

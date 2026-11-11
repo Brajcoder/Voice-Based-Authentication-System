@@ -81,8 +81,7 @@ Open your browser at `http://127.0.0.1:5000`.
    - Computes 1st order (delta) and 2nd order (delta-delta) temporal velocity/acceleration features.
    - Computes vocal-tract acoustic statistics (spectral centroid, bandwidth, rolloff, zero-crossing rate).
 
-3. **CNN Embedding (`ml/model.py`):**
-   - Deep Convolutional Neural Network processes multi-channel spectral features.
-   - Temporal Statistical Pooling aggregates mean and variance across time frames for length invariance.
-   - Projects representation into an L2-normalized 128-dimensional biometric embedding.
-   - Verification uses cosine similarity metric with matching threshold $\ge 0.82$.
+3. **Resemblyzer Voice Embedding (`ml/model.py`):**
+   - Deep Voice Encoder (d-vector architecture) extracts speaker identity representations.
+   - Outputs a normalized 256-dimensional biometric embedding vector.
+   - Verification uses cosine similarity scoring with a threshold of $\ge 0.50$.

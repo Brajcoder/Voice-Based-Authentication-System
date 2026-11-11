@@ -22,9 +22,8 @@ from ml.model import (
 
 voice_bp = Blueprint("voice", __name__, url_prefix="/voice")
 
-# Voice matching threshold for cosine similarity
-# Cosine similarity for same-speaker verification typically >= 0.82
-SIMILARITY_THRESHOLD = 0.82
+# Voice matching threshold for cosine similarity with Resemblyzer d-vectors
+SIMILARITY_THRESHOLD = 0.70
 
 
 def _get_audio_from_request():
