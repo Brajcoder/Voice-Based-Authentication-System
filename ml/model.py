@@ -18,34 +18,34 @@ from ml.features import extract_mfcc, extract_acoustic_stats
 
 class VoiceEmbeddingCNN(nn.Module):
     """
-    Convolutional Neural Network for Speaker Voice Embedding extraction.
-    Takes multi-channel audio features (MFCC, delta, delta2) and produces
-    a normalized, compact 128-dimensional speaker embedding vector.
-    Preserves frequency characteristics and uses temporal statistical pooling
-    (mean and standard deviation) for duration-invariance.
+    Compact Convolutional Neural Network for Speaker Voice Embedding extraction.
+    Designed with reduced capacity and spatial + dense dropout to prevent overfitting
+    on small datasets. Uses temporal statistical pooling for duration invariance.
     """
 
     def __init__(self, in_channels: int = 3, embedding_dim: int = 128):
         super(VoiceEmbeddingCNN, self).__init__()
 
-        # Conv Block 1: frequency 40 -> 20
-        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=(3, 3), padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
+        # Conv Block 1: frequency 40 -> 20 (reduced channels 16)
+        self.conv1 = nn.Conv2d(in_channels, 16, kernel_size=(3, 3), padding=1)
+        self.bn1 = nn.BatchNorm2d(16)
+        self.drop1 = nn.Dropout2d(0.1)
 
-        # Conv Block 2: frequency 20 -> 10
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=(3, 3), padding=1)
-        self.bn2 = nn.BatchNorm2d(64)
+        # Conv Block 2: frequency 20 -> 10 (reduced channels 32)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=(3, 3), padding=1)
+        self.bn2 = nn.BatchNorm2d(32)
+        self.drop2 = nn.Dropout2d(0.1)
 
-        # Conv Block 3: frequency 10 -> 5
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=(3, 3), padding=1)
-        self.bn3 = nn.BatchNorm2d(64)
+        # Conv Block 3: frequency 10 -> 5 (channels 32)
+        self.conv3 = nn.Conv2d(32, 32, kernel_size=(3, 3), padding=1)
+        self.bn3 = nn.BatchNorm2d(32)
 
         # Temporal statistical pooling aggregates mean + std over time frames (dim=3),
-        # leaving frequency (5 bins) and channels (64): 64 * 5 * 2 = 640
-        self.fc1 = nn.Linear(64 * 5 * 2, 256)
-        self.bn_fc = nn.BatchNorm1d(256)
-        self.dropout = nn.Dropout(0.2)
-        self.fc2 = nn.Linear(256, embedding_dim)
+        # leaving frequency (5 bins) and channels (32): 32 * 5 * 2 = 320
+        self.fc1 = nn.Linear(32 * 5 * 2, 128)
+        self.bn_fc = nn.BatchNorm1d(128)
+        self.dropout = nn.Dropout(0.3)
+        self.fc2 = nn.Linear(128, embedding_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -53,10 +53,12 @@ class VoiceEmbeddingCNN(nn.Module):
         """
         # Block 1
         x = F.relu(self.bn1(self.conv1(x)))
+        x = self.drop1(x)
         x = F.max_pool2d(x, kernel_size=(2, 1))  # freq 40 -> 20
 
         # Block 2
         x = F.relu(self.bn2(self.conv2(x)))
+        x = self.drop2(x)
         x = F.max_pool2d(x, kernel_size=(2, 1))  # freq 20 -> 10
 
         # Block 3
@@ -64,10 +66,10 @@ class VoiceEmbeddingCNN(nn.Module):
         x = F.max_pool2d(x, kernel_size=(2, 1))  # freq 10 -> 5
 
         # Temporal Statistical Pooling (mean and standard deviation along time dim=3)
-        mean = torch.mean(x, dim=3)  # shape: (batch, 64, 5)
-        std = torch.std(x, dim=3, unbiased=False) + 1e-6  # shape: (batch, 64, 5)
+        mean = torch.mean(x, dim=3)  # shape: (batch, 32, 5)
+        std = torch.std(x, dim=3, unbiased=False) + 1e-6  # shape: (batch, 32, 5)
 
-        # Concatenate along channel dim: shape (batch, 128, 5) -> flatten: (batch, 640)
+        # Concatenate along channel dim: shape (batch, 64, 5) -> flatten: (batch, 320)
         stats = torch.cat([mean, std], dim=1).flatten(1)
 
         # Projection to embedding space
@@ -80,6 +82,8 @@ class VoiceEmbeddingCNN(nn.Module):
         return emb
 
 
+import os
+
 # Global singleton instance of the model
 _MODEL_INSTANCE: VoiceEmbeddingCNN | None = None
 
@@ -90,6 +94,16 @@ def get_model() -> VoiceEmbeddingCNN:
     if _MODEL_INSTANCE is None:
         torch.manual_seed(42)  # Deterministic initialization
         model = VoiceEmbeddingCNN(in_channels=3, embedding_dim=128)
+
+        weights_path = os.path.join(os.path.dirname(__file__), "model_weights.pth")
+        if os.path.exists(weights_path):
+            try:
+                state_dict = torch.load(weights_path, map_location="cpu")
+                model.load_state_dict(state_dict)
+                print(f"[ML] Loaded trained weights from {weights_path}")
+            except Exception as e:
+                print(f"[ML] Could not load weights from {weights_path}: {e}")
+
         model.eval()
         _MODEL_INSTANCE = model
     return _MODEL_INSTANCE
