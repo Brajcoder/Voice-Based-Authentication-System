@@ -23,8 +23,7 @@ from ml.model import (
 voice_bp = Blueprint("voice", __name__, url_prefix="/voice")
 
 # Voice matching threshold for cosine similarity with Resemblyzer d-vectors
-SIMILARITY_THRESHOLD = 0.70
-
+SIMILARITY_THRESHOLD = 0.6993
 
 def _get_audio_from_request():
     """Extract audio data from either multipart form upload or raw body."""
