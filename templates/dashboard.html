@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard - Voice-Based Authentication</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <div class="dashboard-container">
+    <!-- Header / Navbar -->
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 20px; margin-bottom: 24px; flex-wrap: wrap; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 14px;">
+        <div class="logo-badge" style="margin-bottom: 0; width: 44px; height: 44px;">
+          <svg viewBox="0 0 24 24" style="width: 24px; height: 24px;">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+          </svg>
+        </div>
+        <div>
+          <h2 style="font-size: 20px; font-weight: 700;">Welcome, {{ user['username'] }}</h2>
+          <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+            {% if user['is_enrolled'] %}
+              <span class="status-badge enrolled" id="badge-enrolled">● Voice Enrolled</span>
+              <span style="font-size: 12px; color: var(--text-muted);">Enrolled on {{ user['enrolled_at'] }}</span>
+            {% else %}
+              <span class="status-badge not-enrolled" id="badge-enrolled">● Voice Not Enrolled</span>
+              <span style="font-size: 12px; color: var(--text-muted);">Please enroll your voice signature below</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 10px;">
+        {% if user['is_enrolled'] %}
+          <button type="button" class="btn btn-outline-danger" style="width: auto; padding: 8px 16px; font-size: 13px;" onclick="resetVoice()">
+            Reset Voice Profile
+          </button>
+        {% endif %}
+        <a href="{{ url_for('auth.logout') }}" class="btn btn-secondary" style="width: auto; padding: 8px 16px; font-size: 13px;">
+          Log Out
+        </a>
+      </div>
+    </div>
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }}">
+            <span>{{ message }}</span>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div id="dash-alert" class="alert" style="display: none;"></div>
+
+    <!-- Dashboard Content Grid -->
+    <div class="dashboard-grid">
+      <!-- Section 1: Voice Enrollment -->
+      <div class="card">
+        <h3 class="card-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+          </svg>
+          1. Voice Signature Enrollment
+        </h3>
+        <p style="font-size: 14px; color: var(--text-muted); line-height: 1.5;">
+          Capture your unique vocal biometric fingerprint. Record yourself speaking the reference passphrase clearly.
+        </p>
+
+        <div class="phrase-card">
+          Passphrase: <strong>"My voice is my secure password"</strong>
+        </div>
+
+        <div class="recorder-box">
+          <canvas id="enroll-visualizer" class="visualizer-canvas"></canvas>
+          <div class="record-btn-container">
+            <button type="button" id="record-btn-enroll" class="record-btn" onclick="toggleEnrollRecording()">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+              </svg>
+            </button>
+          </div>
+          <div class="timer" id="timer-enroll">00:00</div>
+          <p id="enroll-instruction" style="font-size: 13px; color: var(--text-muted); margin-top: 8px;">
+            Click the mic and speak the passphrase
+          </p>
+
+          <audio id="audio-preview-enroll" controls style="display: none; width: 100%; margin-top: 14px;"></audio>
+        </div>
+
+        <button
+          type="button"
+          id="btn-save-enroll"
+          class="btn btn-primary"
+          style="display: none;"
+          onclick="submitEnrollment()"
+        >
+          Save Voice Signature
+        </button>
+      </div>
+
+      <!-- Section 2: Voice Verification Test -->
+      <div class="card">
+        <h3 class="card-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+          </svg>
+          2. Live Biometric Verification Test
+        </h3>
+        <p style="font-size: 14px; color: var(--text-muted); line-height: 1.5;">
+          Test your enrolled voice model. Speak the passphrase to calculate similarity against your enrolled template.
+        </p>
+
+        <div class="phrase-card">
+          Verification Test: Speak the same passphrase
+        </div>
+
+        <div class="recorder-box">
+          <canvas id="verify-visualizer" class="visualizer-canvas"></canvas>
+          <div class="record-btn-container">
+            <button type="button" id="record-btn-verify" class="record-btn" onclick="toggleVerifyRecording()">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+              </svg>
+            </button>
+          </div>
+          <div class="timer" id="timer-verify">00:00</div>
+          <p id="verify-instruction" style="font-size: 13px; color: var(--text-muted); margin-top: 8px;">
+            Click to record a verification sample
+          </p>
+
+          <audio id="audio-preview-verify" controls style="display: none; width: 100%; margin-top: 14px;"></audio>
+        </div>
+
+        <button
+          type="button"
+          id="btn-run-verify"
+          class="btn btn-primary"
+          style="display: none;"
+          onclick="submitVerification()"
+        >
+          Verify Voice Match
+        </button>
+
+        <div id="test-score-box" class="score-box" style="display: none;">
+          <div style="display: flex; justify-content: space-between; font-size: 13px;">
+            <span>Biometric Match Score</span>
+            <span id="test-score-text" style="font-weight: 700;">0%</span>
+          </div>
+          <div class="score-bar-bg">
+            <div id="test-score-bar" class="score-bar-fill"></div>
+          </div>
+          <div id="test-result-msg" style="font-size: 13px; margin-top: 6px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='recorder.js') }}"></script>
+  <script>
+    function showDashAlert(msg, category = 'danger') {
+      const alert = document.getElementById('dash-alert');
+      alert.className = `alert alert-${category}`;
+      alert.textContent = msg;
+      alert.style.display = 'block';
+    }
+
+    function clearDashAlert() {
+      document.getElementById('dash-alert').style.display = 'none';
+    }
+
+    function setupCanvas(canvasId) {
+      const canvas = document.getElementById(canvasId);
+      const ctx = canvas.getContext('2d');
+      return (dataArray) => {
+        ctx.fillStyle = '#090d16';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        const barWidth = (canvas.width / dataArray.length) * 2.5;
+        let x = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          const barHeight = (dataArray[i] / 255) * canvas.height;
+          ctx.fillStyle = `rgb(${dataArray[i] + 40}, 79, 229)`;
+          ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+          x += barWidth + 1;
+        }
+      };
+    }
+
+    const drawEnrollVisualizer = setupCanvas('enroll-visualizer');
+    const drawVerifyVisualizer = setupCanvas('verify-visualizer');
+
+    // ---------------- Enrollment Logic ----------------
+    let enrollRecorder = null;
+    let enrollBlob = null;
+    let enrollTimer = null;
+    let enrollSeconds = 0;
+
+    async function toggleEnrollRecording() {
+      clearDashAlert();
+      const btn = document.getElementById('record-btn-enroll');
+
+      if (!enrollRecorder || !enrollRecorder.isRecording) {
+        try {
+          enrollRecorder = new VoiceRecorder({
+            sampleRate: 16000,
+            onVisualizerTick: drawEnrollVisualizer,
+            onStateChange: (state) => {
+              if (state === 'recording') {
+                btn.classList.add('recording');
+                document.getElementById('enroll-instruction').textContent = "Speaking... Click to stop";
+              } else {
+                btn.classList.remove('recording');
+                document.getElementById('enroll-instruction').textContent = "Recording complete";
+              }
+            }
+          });
+
+          await enrollRecorder.start();
+          enrollSeconds = 0;
+          document.getElementById('timer-enroll').textContent = "00:00";
+          enrollTimer = setInterval(() => {
+            enrollSeconds++;
+            const mins = String(Math.floor(enrollSeconds / 60)).padStart(2, '0');
+            const secs = String(enrollSeconds % 60).padStart(2, '0');
+            document.getElementById('timer-enroll').textContent = `${mins}:${secs}`;
+          }, 1000);
+
+        } catch (err) {
+          showDashAlert("Microphone error: " + err.message);
+        }
+      } else {
+        clearInterval(enrollTimer);
+        enrollBlob = await enrollRecorder.stop();
+
+        if (enrollBlob) {
+          const audioUrl = URL.createObjectURL(enrollBlob);
+          const preview = document.getElementById('audio-preview-enroll');
+          preview.src = audioUrl;
+          preview.style.display = 'block';
+          document.getElementById('btn-save-enroll').style.display = 'inline-flex';
+        }
+      }
+    }
+
+    async function submitEnrollment() {
+      clearDashAlert();
+      if (!enrollBlob) {
+        showDashAlert("Please record your voice first.");
+        return;
+      }
+
+      const saveBtn = document.getElementById('btn-save-enroll');
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Processing audio & extracting CNN embedding...";
+
+      try {
+        const result = await VoiceAuthAPI.enroll(enrollBlob);
+        if (result.success) {
+          showDashAlert(result.message, 'success');
+          setTimeout(() => {
+            window.location.reload();
+          }, 1200);
+        } else {
+          showDashAlert(result.error || "Enrollment failed.", 'danger');
+        }
+      } catch (err) {
+        showDashAlert("Error saving enrollment: " + err.message);
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = "Save Voice Signature";
+      }
+    }
+
+    // ---------------- Verification Logic ----------------
+    let verifyRecorder = null;
+    let verifyBlob = null;
+    let verifyTimer = null;
+    let verifySeconds = 0;
+
+    async function toggleVerifyRecording() {
+      clearDashAlert();
+      const btn = document.getElementById('record-btn-verify');
+
+      if (!verifyRecorder || !verifyRecorder.isRecording) {
+        try {
+          verifyRecorder = new VoiceRecorder({
+            sampleRate: 16000,
+            onVisualizerTick: drawVerifyVisualizer,
+            onStateChange: (state) => {
+              if (state === 'recording') {
+                btn.classList.add('recording');
+                document.getElementById('verify-instruction').textContent = "Speaking... Click to stop";
+              } else {
+                btn.classList.remove('recording');
+                document.getElementById('verify-instruction').textContent = "Recording complete";
+              }
+            }
+          });
+
+          await verifyRecorder.start();
+          verifySeconds = 0;
+          document.getElementById('timer-verify').textContent = "00:00";
+          verifyTimer = setInterval(() => {
+            verifySeconds++;
+            const mins = String(Math.floor(verifySeconds / 60)).padStart(2, '0');
+            const secs = String(verifySeconds % 60).padStart(2, '0');
+            document.getElementById('timer-verify').textContent = `${mins}:${secs}`;
+          }, 1000);
+
+        } catch (err) {
+          showDashAlert("Microphone error: " + err.message);
+        }
+      } else {
+        clearInterval(verifyTimer);
+        verifyBlob = await verifyRecorder.stop();
+
+        if (verifyBlob) {
+          const audioUrl = URL.createObjectURL(verifyBlob);
+          const preview = document.getElementById('audio-preview-verify');
+          preview.src = audioUrl;
+          preview.style.display = 'block';
+          document.getElementById('btn-run-verify').style.display = 'inline-flex';
+        }
+      }
+    }
+
+    async function submitVerification() {
+      clearDashAlert();
+      if (!verifyBlob) {
+        showDashAlert("Please record a test audio sample first.");
+        return;
+      }
+
+      const verifyBtn = document.getElementById('btn-run-verify');
+      verifyBtn.disabled = true;
+      verifyBtn.textContent = "Calculating cosine similarity...";
+
+      try {
+        const result = await VoiceAuthAPI.verify(verifyBlob);
+
+        const scoreBox = document.getElementById('test-score-box');
+        const scoreBar = document.getElementById('test-score-bar');
+        const scoreText = document.getElementById('test-score-text');
+        const resultMsg = document.getElementById('test-result-msg');
+
+        scoreBox.style.display = 'block';
+        scoreBar.style.width = `${result.percentage || 0}%`;
+        scoreText.textContent = `${result.percentage || 0}% (Cosine: ${result.score || 0})`;
+
+        if (result.success && result.matched) {
+          resultMsg.style.color = '#34d399';
+          resultMsg.textContent = "Match Succeeded! Voice matches enrolled template.";
+          showDashAlert(result.message, 'success');
+        } else {
+          resultMsg.style.color = '#f87171';
+          resultMsg.textContent = result.message || result.error || "Match Failed.";
+          showDashAlert(result.message || result.error, 'danger');
+        }
+      } catch (err) {
+        showDashAlert("Verification request failed: " + err.message);
+      } finally {
+        verifyBtn.disabled = false;
+        verifyBtn.textContent = "Verify Voice Match";
+      }
+    }
+
+    async function resetVoice() {
+      if (!confirm("Are you sure you want to delete your enrolled voice profile and re-enroll?")) {
+        return;
+      }
+      try {
+        const result = await VoiceAuthAPI.reset();
+        if (result.success) {
+          window.location.reload();
+        } else {
+          showDashAlert(result.error || "Reset failed.", 'danger');
+        }
+      } catch (err) {
+        showDashAlert("Failed to reset voice profile: " + err.message);
+      }
+    }
+  </script>
+</body>
+</html>
+

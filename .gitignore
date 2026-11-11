@@ -1,0 +1,35 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Database
+*.db
+*.sqlite3
+instance/
+
+# Audio / Temp files
+temp_audio/
+uploads/
+*.wav
+*.mp3
+*.webm
+*.ogg
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Speechbrain & HuggingFace caches
+pretrained_models/
+.cache/
+
