@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login - Voice-Based Authentication</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <div class="auth-container">
+    <div class="header">
+      <div class="logo-badge">
+        <svg viewBox="0 0 24 24">
+          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+        </svg>
+      </div>
+      <h1 class="title">Voice Authentication</h1>
+      <p class="subtitle">Secure multi-factor biometrics & password portal</p>
+    </div>
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }}">
+            <span>{{ message }}</span>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div id="client-alert" class="alert" style="display: none;"></div>
+
+    <!-- Login Mode Tabs -->
+    <div class="tabs-header">
+      <button type="button" class="tab-btn active" id="tab-btn-password" onclick="switchTab('password')">
+        Password Login
+      </button>
+      <button type="button" class="tab-btn" id="tab-btn-voice" onclick="switchTab('voice')">
+        Voice Login
+      </button>
+    </div>
+
+    <!-- Tab 1: Password Form -->
+    <div class="tab-pane active" id="tab-password">
+      <form action="{{ url_for('auth.login') }}" method="POST">
+        <div class="form-group">
+          <label for="username">Username</label>
+          <input
+            type="text"
+            id="username"
+            name="username"
+            class="input-field"
+            placeholder="Enter your username"
+            value="{{ username or '' }}"
+            required
+            autocomplete="username"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            class="input-field"
+            placeholder="Enter your password"
+            required
+            autocomplete="current-password"
+          />
+        </div>
+
+        <button type="submit" class="btn btn-primary">
+          Sign In with Password
+        </button>
+      </form>
+    </div>
+
+    <!-- Tab 2: Voice Login -->
+    <div class="tab-pane" id="tab-voice">
+      <div class="form-group">
+        <label for="voice-username">Username</label>
+        <input
+          type="text"
+          id="voice-username"
+          class="input-field"
+          placeholder="Enter enrolled username"
+          value="{{ username or '' }}"
+        />
+      </div>
+
+      <div class="phrase-card">
+        Passphrase: <strong>"My voice is my secure password"</strong>
+      </div>
+
+      <div class="recorder-box">
+        <canvas id="login-visualizer" class="visualizer-canvas"></canvas>
+        <div class="record-btn-container">
+          <button type="button" id="record-btn-login" class="record-btn" onclick="toggleVoiceLoginRecording()">
+            <svg id="mic-icon-login" width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+              <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+            </svg>
+          </button>
+        </div>
+        <div class="timer" id="timer-login">00:00</div>
+        <p id="record-instruction-login" style="font-size: 13px; color: var(--text-muted); margin-top: 8px;">
+          Click the mic and speak the passphrase
+        </p>
+
+        <audio id="audio-preview-login" controls style="display: none; width: 100%; margin-top: 14px;"></audio>
+      </div>
+
+      <button
+        type="button"
+        id="btn-verify-voice"
+        class="btn btn-primary"
+        style="display: none;"
+        onclick="submitVoiceLogin()"
+      >
+        Authenticate with Voice
+      </button>
+
+      <div id="voice-login-score" class="score-box" style="display: none;">
+        <div style="display: flex; justify-content: space-between; font-size: 13px;">
+          <span>Similarity Match</span>
+          <span id="voice-score-text" style="font-weight: 700;">0%</span>
+        </div>
+        <div class="score-bar-bg">
+          <div id="voice-score-bar" class="score-bar-fill"></div>
+        </div>
+        <div id="voice-result-msg" style="font-size: 13px; margin-top: 6px;"></div>
+      </div>
+    </div>
+
+    <div class="footer-links">
+      Don't have an account?
+      <a href="{{ url_for('auth.register') }}">Create an account</a>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='recorder.js') }}"></script>
+  <script>
+    function switchTab(mode) {
+      document.getElementById('tab-btn-password').classList.toggle('active', mode === 'password');
+      document.getElementById('tab-btn-voice').classList.toggle('active', mode === 'voice');
+      document.getElementById('tab-password').classList.toggle('active', mode === 'password');
+      document.getElementById('tab-voice').classList.toggle('active', mode === 'voice');
+      clearAlert();
+    }
+
+    function showAlert(msg, category = 'danger') {
+      const alert = document.getElementById('client-alert');
+      alert.className = `alert alert-${category}`;
+      alert.textContent = msg;
+      alert.style.display = 'block';
+    }
+
+    function clearAlert() {
+      document.getElementById('client-alert').style.display = 'none';
+    }
+
+    // Voice Recorder for Login
+    let voiceLoginRecorder = null;
+    let voiceLoginBlob = null;
+    let timerInterval = null;
+    let secondsElapsed = 0;
+
+    const canvas = document.getElementById('login-visualizer');
+    const canvasCtx = canvas.getContext('2d');
+
+    function drawVisualizer(dataArray) {
+      canvasCtx.fillStyle = '#090d16';
+      canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const barWidth = (canvas.width / dataArray.length) * 2.5;
+      let x = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const barHeight = (dataArray[i] / 255) * canvas.height;
+        canvasCtx.fillStyle = `rgb(${dataArray[i] + 50}, 79, 229)`;
+        canvasCtx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+        x += barWidth + 1;
+      }
+    }
+
+    async function toggleVoiceLoginRecording() {
+      clearAlert();
+      const btn = document.getElementById('record-btn-login');
+
+      if (!voiceLoginRecorder || !voiceLoginRecorder.isRecording) {
+        // Start
+        try {
+          voiceLoginRecorder = new VoiceRecorder({
+            sampleRate: 16000,
+            onVisualizerTick: drawVisualizer,
+            onStateChange: (state) => {
+              if (state === 'recording') {
+                btn.classList.add('recording');
+                document.getElementById('record-instruction-login').textContent = "Speaking... Click to stop";
+              } else {
+                btn.classList.remove('recording');
+                document.getElementById('record-instruction-login').textContent = "Recording complete";
+              }
+            }
+          });
+
+          await voiceLoginRecorder.start();
+          secondsElapsed = 0;
+          document.getElementById('timer-login').textContent = "00:00";
+          timerInterval = setInterval(() => {
+            secondsElapsed++;
+            const mins = String(Math.floor(secondsElapsed / 60)).padStart(2, '0');
+            const secs = String(secondsElapsed % 60).padStart(2, '0');
+            document.getElementById('timer-login').textContent = `${mins}:${secs}`;
+          }, 1000);
+
+        } catch (err) {
+          showAlert("Microphone permission denied or unsupported: " + err.message);
+        }
+      } else {
+        // Stop
+        clearInterval(timerInterval);
+        voiceLoginBlob = await voiceLoginRecorder.stop();
+
+        if (voiceLoginBlob) {
+          const audioUrl = URL.createObjectURL(voiceLoginBlob);
+          const preview = document.getElementById('audio-preview-login');
+          preview.src = audioUrl;
+          preview.style.display = 'block';
+          document.getElementById('btn-verify-voice').style.display = 'inline-flex';
+        }
+      }
+    }
+
+    async function submitVoiceLogin() {
+      clearAlert();
+      const username = document.getElementById('voice-username').value.trim();
+      if (!username) {
+        showAlert("Please enter your username first.");
+        return;
+      }
+      if (!voiceLoginBlob) {
+        showAlert("Please record your voice passphrase first.");
+        return;
+      }
+
+      const verifyBtn = document.getElementById('btn-verify-voice');
+      verifyBtn.disabled = true;
+      verifyBtn.textContent = "Verifying biometric voice...";
+
+      try {
+        const result = await VoiceAuthAPI.verify(voiceLoginBlob, username);
+
+        const scoreBox = document.getElementById('voice-login-score');
+        const scoreBar = document.getElementById('voice-score-bar');
+        const scoreText = document.getElementById('voice-score-text');
+        const resultMsg = document.getElementById('voice-result-msg');
+
+        scoreBox.style.display = 'block';
+        scoreBar.style.width = `${result.percentage || 0}%`;
+        scoreText.textContent = `${result.percentage || 0}% (Score: ${result.score || 0})`;
+
+        if (result.success && result.matched) {
+          resultMsg.style.color = '#34d399';
+          resultMsg.textContent = "Voice match confirmed! Redirecting...";
+          showAlert(result.message, 'success');
+          setTimeout(() => {
+            window.location.href = result.redirect_url || '/dashboard';
+          }, 1200);
+        } else {
+          resultMsg.style.color = '#f87171';
+          resultMsg.textContent = result.message || result.error || "Voice match failed.";
+          showAlert(result.message || result.error, 'danger');
+        }
+      } catch (err) {
+        showAlert("Verification request failed: " + err.message);
+      } finally {
+        verifyBtn.disabled = false;
+        verifyBtn.textContent = "Authenticate with Voice";
+      }
+    }
+  </script>
+</body>
+</html>
+
