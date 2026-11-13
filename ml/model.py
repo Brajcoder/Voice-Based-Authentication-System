@@ -188,24 +188,59 @@ def extract_embedding(audio_input, sr: int = 16000) -> np.ndarray:
     return embedding
 
 
-def compute_similarity(embedding1: np.ndarray, embedding2: np.ndarray) -> float:
-    """
-    Compute cosine similarity between two voice embeddings.
-    Cosine similarity of normalized vectors is their dot product.
-    Returns float in range [-1.0, 1.0].
-    """
-    e1 = np.asarray(embedding1, dtype=np.float32).flatten()
-    e2 = np.asarray(embedding2, dtype=np.float32).flatten()
+def _single_cosine_similarity(e1: np.ndarray, e2: np.ndarray) -> float:
+    """Compute cosine similarity between two single 1D vectors."""
+    v1 = np.asarray(e1, dtype=np.float32).flatten()
+    v2 = np.asarray(e2, dtype=np.float32).flatten()
 
-    norm1 = np.linalg.norm(e1)
-    norm2 = np.linalg.norm(e2)
+    norm1 = np.linalg.norm(v1)
+    norm2 = np.linalg.norm(v2)
 
     if norm1 < 1e-6 or norm2 < 1e-6:
         return 0.0
 
-    dot_product = float(np.dot(e1, e2) / (norm1 * norm2))
-    # Clamp to [-1.0, 1.0]
+    dot_product = float(np.dot(v1, v2) / (norm1 * norm2))
     return max(-1.0, min(1.0, dot_product))
+
+
+def compute_similarity(embedding1, embedding2) -> float:
+    """
+    Compute cosine similarity between voice embeddings.
+    If either embedding1 or embedding2 is a list/collection of stored embeddings,
+    compares the test embedding against all stored embeddings and returns the
+    maximum cosine similarity score as the final score.
+    Returns float in range [-1.0, 1.0].
+    """
+    is_list1 = isinstance(embedding1, (list, tuple)) or (
+        isinstance(embedding1, np.ndarray) and embedding1.ndim == 2
+    )
+    is_list2 = isinstance(embedding2, (list, tuple)) or (
+        isinstance(embedding2, np.ndarray) and embedding2.ndim == 2
+    )
+
+    if is_list1 and not is_list2:
+        if len(embedding1) == 0:
+            return 0.0
+        scores = [_single_cosine_similarity(emb, embedding2) for emb in embedding1]
+        return max(scores)
+
+    if is_list2 and not is_list1:
+        if len(embedding2) == 0:
+            return 0.0
+        scores = [_single_cosine_similarity(embedding1, emb) for emb in embedding2]
+        return max(scores)
+
+    if is_list1 and is_list2:
+        if len(embedding1) == 0 or len(embedding2) == 0:
+            return 0.0
+        scores = [
+            _single_cosine_similarity(e1, e2)
+            for e1 in embedding1
+            for e2 in embedding2
+        ]
+        return max(scores)
+
+    return _single_cosine_similarity(embedding1, embedding2)
 
 
 def embedding_to_bytes(embedding: np.ndarray) -> bytes:
@@ -221,3 +256,48 @@ def bytes_to_embedding(data: bytes) -> np.ndarray:
     bio = io.BytesIO(data)
     arr = np.load(bio, allow_pickle=False)
     return arr.astype(np.float32)
+
+
+import pickle
+
+
+def embeddings_list_to_bytes(embeddings: list) -> bytes:
+    """Serialize a list of numpy arrays to binary bytes for SQLite BLOB storage."""
+    clean_list = [np.asarray(e, dtype=np.float32) for e in embeddings]
+    return pickle.dumps(clean_list)
+
+
+def bytes_to_embeddings_list(data: bytes | None) -> list:
+    """
+    Deserialize binary bytes from SQLite BLOB to a list of numpy embedding arrays.
+    Supports pickle and np.load (2D, 1D, or object array) for robust compatibility.
+    """
+    if not data:
+        return []
+
+    try:
+        obj = pickle.loads(data)
+        if isinstance(obj, list):
+            return [np.asarray(x, dtype=np.float32) for x in obj]
+        elif isinstance(obj, np.ndarray):
+            if obj.ndim == 2:
+                return [row.astype(np.float32) for row in obj]
+            elif obj.ndim == 1:
+                return [obj.astype(np.float32)]
+    except Exception:
+        pass
+
+    try:
+        bio = io.BytesIO(data)
+        arr = np.load(bio, allow_pickle=True)
+        if isinstance(arr, np.ndarray):
+            if arr.ndim == 2:
+                return [row.astype(np.float32) for row in arr]
+            elif arr.ndim == 1:
+                return [arr.astype(np.float32)]
+            elif arr.dtype == object:
+                return [np.asarray(x, dtype=np.float32) for x in arr.tolist()]
+    except Exception:
+        pass
+
+    return []
