@@ -10,8 +10,14 @@ from database import (
     get_user_by_username,
     save_voice_embedding,
     delete_voice_embedding,
+    embeddings_list_to_bytes,
+    bytes_to_embeddings_list,
+    increment_voice_fail,
+    reset_voice_fail,
+    is_voice_locked,
 )
 from auth import login_required
+from extensions import limiter
 from ml.preprocess import preprocess_audio
 from ml.model import (
     extract_embedding,
@@ -42,11 +48,15 @@ def _get_audio_from_request():
 
 
 @voice_bp.route("/enroll", methods=["POST"])
+@limiter.limit("10 per minute")
 @login_required
 def enroll():
     """
     Enroll the logged-in user's voice signature.
-    Receives an audio sample, extracts the CNN embedding, and stores in SQLite.
+    Stores up to 3 voice embeddings per user.
+    If fewer than 3 samples exist, appends the new embedding to the list.
+    If 3 already exist, replaces the oldest (FIFO).
+    Maintains backward compatibility with the single voice_embedding column.
     """
     user_id = session.get("user_id")
     user = get_user_by_id(user_id)
@@ -59,20 +69,50 @@ def enroll():
         # Preprocess and clean audio
         cleaned_signal, sr = preprocess_audio(audio_data)
 
-        # Extract 128-d normalized embedding
-        embedding = extract_embedding(cleaned_signal, sr=sr)
+        # Extract normalized embedding
+        new_embedding = extract_embedding(cleaned_signal, sr=sr)
 
-        # Serialize and save to database
-        raw_bytes = embedding_to_bytes(embedding)
-        success = save_voice_embedding(user_id, raw_bytes)
+        # Retrieve existing embeddings from list column
+        existing_embeddings = []
+        if "voice_embeddings_list" in user.keys() and user["voice_embeddings_list"]:
+            existing_embeddings = bytes_to_embeddings_list(user["voice_embeddings_list"])
+
+        # Backward compatibility: fall back to single voice_embedding if list is empty
+        if not existing_embeddings and "voice_embedding" in user.keys() and user["voice_embedding"]:
+            try:
+                single_emb = bytes_to_embedding(user["voice_embedding"])
+                existing_embeddings = [single_emb]
+            except Exception:
+                existing_embeddings = []
+
+        # If fewer than 3 samples exist append, if 3 already exist replace oldest
+        if len(existing_embeddings) < 3:
+            existing_embeddings.append(new_embedding)
+        else:
+            existing_embeddings.pop(0)
+            existing_embeddings.append(new_embedding)
+
+        # Serialize list of numpy arrays for voice_embeddings_list column
+        list_bytes = embeddings_list_to_bytes(existing_embeddings)
+        # Also serialize latest single embedding for backward compatibility with voice_embedding column
+        single_bytes = embedding_to_bytes(new_embedding)
+
+        # Save to database
+        success = save_voice_embedding(
+            user_id,
+            embedding_bytes=single_bytes,
+            embeddings_list_bytes=list_bytes,
+        )
 
         if not success:
             return jsonify({"success": False, "error": "Database update failed."}), 500
 
+        count = len(existing_embeddings)
         return jsonify({
             "success": True,
-            "message": "Voice signature successfully enrolled!",
+            "message": f"Voice signature sample {count}/3 successfully enrolled!",
             "is_enrolled": 1,
+            "samples_count": count,
         })
 
     except ValueError as e:
@@ -82,6 +122,7 @@ def enroll():
 
 
 @voice_bp.route("/verify", methods=["POST"])
+@limiter.limit("5 per minute")
 def verify():
     """
     Verify voice audio against stored enrollment.
@@ -111,7 +152,23 @@ def verify():
             "error": "User not found.",
         }), 404
 
-    if not user["is_enrolled"] or not user["voice_embedding"]:
+    # Before processing audio check if the user is locked
+    lock_status = is_voice_locked(user["id"])
+    if lock_status:
+        mins = lock_status.remaining_minutes
+        minute_str = f"{mins} minute{'s' if mins != 1 else ''}"
+        return jsonify({
+            "success": False,
+            "error": f"Voice login is locked due to too many failed attempts. Try again in {minute_str}.",
+            "locked": True,
+            "remaining_minutes": mins,
+        }), 403
+
+    has_embeddings = bool(
+        ("voice_embeddings_list" in user.keys() and user["voice_embeddings_list"])
+        or ("voice_embedding" in user.keys() and user["voice_embedding"])
+    )
+    if not user["is_enrolled"] or not has_embeddings:
         return jsonify({
             "success": False,
             "error": "No voice signature enrolled for this user. Please enroll first.",
@@ -126,11 +183,27 @@ def verify():
         # Extract embedding from test audio
         test_embedding = extract_embedding(cleaned_signal, sr=sr)
 
-        # Retrieve enrolled reference embedding
-        enrolled_embedding = bytes_to_embedding(user["voice_embedding"])
+        # Retrieve enrolled reference embeddings
+        stored_embeddings = []
+        if "voice_embeddings_list" in user.keys() and user["voice_embeddings_list"]:
+            stored_embeddings = bytes_to_embeddings_list(user["voice_embeddings_list"])
 
-        # Compute cosine similarity
-        score = compute_similarity(enrolled_embedding, test_embedding)
+        # Backward compatibility with existing single voice_embedding BLOB column
+        if not stored_embeddings and "voice_embedding" in user.keys() and user["voice_embedding"]:
+            try:
+                stored_embeddings = [bytes_to_embedding(user["voice_embedding"])]
+            except Exception:
+                stored_embeddings = []
+
+        if not stored_embeddings:
+            return jsonify({
+                "success": False,
+                "error": "No valid voice embeddings found for user. Please enroll first.",
+            }), 400
+
+        # During verification in compute_similarity, compare the test embedding
+        # against all stored embeddings and use the maximum cosine similarity score as the final score.
+        score = compute_similarity(stored_embeddings, test_embedding)
 
         # Map score [-1, 1] to human-friendly percentage [0, 100]
         # For speech similarity, score >= 0.72 indicates high confidence match
@@ -138,11 +211,27 @@ def verify():
 
         is_match = bool(score >= SIMILARITY_THRESHOLD)
 
-        # If voice login was requested and matched, establish session
-        if is_login_attempt and is_match:
-            session.clear()
-            session["user_id"] = user["id"]
-            session["username"] = user["username"]
+        if is_match:
+            # On a successful match reset the counter
+            reset_voice_fail(user["id"])
+            if is_login_attempt:
+                session.clear()
+                session["user_id"] = user["id"]
+                session["username"] = user["username"]
+            msg = "Voice verified successfully! Match confirmed."
+            is_locked = False
+            remaining_mins = 0
+        else:
+            # On a failed match increment the counter
+            fail_result = increment_voice_fail(user["id"])
+            is_locked = fail_result.locked
+            remaining_mins = fail_result.remaining_minutes
+            if is_locked:
+                minute_str = f"{remaining_mins} minute{'s' if remaining_mins != 1 else ''}"
+                msg = f"Voice verification failed. Maximum attempts exceeded. Voice login is locked for {minute_str}."
+            else:
+                attempts_left = max(0, 5 - fail_result.count)
+                msg = f"Voice verification failed. Speaker does not match enrolled profile. ({attempts_left} attempt{'s' if attempts_left != 1 else ''} remaining before lock)"
 
         return jsonify({
             "success": True,
@@ -150,11 +239,9 @@ def verify():
             "score": round(float(score), 4),
             "percentage": round(percentage, 1),
             "threshold": SIMILARITY_THRESHOLD,
-            "message": (
-                "Voice verified successfully! Match confirmed."
-                if is_match
-                else "Voice verification failed. Speaker does not match enrolled profile."
-            ),
+            "message": msg,
+            "locked": is_locked,
+            "remaining_minutes": remaining_mins,
             "logged_in": is_login_attempt and is_match,
             "redirect_url": "/dashboard" if (is_login_attempt and is_match) else None,
         })
@@ -188,9 +275,24 @@ def status():
     if not user:
         return jsonify({"enrolled": False, "user_found": False})
 
+    has_embeddings = bool(
+        ("voice_embeddings_list" in user.keys() and user["voice_embeddings_list"])
+        or ("voice_embedding" in user.keys() and user["voice_embedding"])
+    )
+    enrolled = bool(user["is_enrolled"] and has_embeddings)
+    samples_count = 0
+    if "voice_embeddings_list" in user.keys() and user["voice_embeddings_list"]:
+        samples_count = len(bytes_to_embeddings_list(user["voice_embeddings_list"]))
+    elif "voice_embedding" in user.keys() and user["voice_embedding"]:
+        samples_count = 1
+
+    lock_status = is_voice_locked(user["id"])
     return jsonify({
         "user_found": True,
         "username": user["username"],
-        "enrolled": bool(user["is_enrolled"]),
+        "enrolled": enrolled,
+        "samples_count": samples_count,
         "enrolled_at": str(user["enrolled_at"]) if user["enrolled_at"] else None,
+        "locked": bool(lock_status),
+        "remaining_minutes": lock_status.remaining_minutes if lock_status else 0,
     })

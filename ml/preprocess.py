@@ -6,10 +6,51 @@ amplitude normalization, and signal validation.
 
 import io
 import os
+import atexit
 import tempfile
+import threading
 import numpy as np
 import soundfile as sf
 import librosa
+
+# Track active temporary files for emergency cleanup on process exit
+_ACTIVE_TEMP_FILES: set[str] = set()
+_TEMP_FILES_LOCK = threading.Lock()
+
+
+def _track_temp_file(path: str) -> None:
+    """Register temporary file path for tracking."""
+    with _TEMP_FILES_LOCK:
+        _ACTIVE_TEMP_FILES.add(path)
+
+
+def _cleanup_temp_file(path: str) -> None:
+    """Remove a tracked temporary file and delete it from disk."""
+    with _TEMP_FILES_LOCK:
+        _ACTIVE_TEMP_FILES.discard(path)
+    try:
+        if os.path.exists(path):
+            os.unlink(path)
+    except OSError:
+        pass
+
+
+@atexit.register
+def cleanup_temp_files() -> None:
+    """
+    Module-level atexit handler that cleans up any remaining temporary files
+    if the Flask process exits unexpectedly.
+    """
+    with _TEMP_FILES_LOCK:
+        remaining_files = list(_ACTIVE_TEMP_FILES)
+        _ACTIVE_TEMP_FILES.clear()
+
+    for path in remaining_files:
+        try:
+            if os.path.exists(path):
+                os.unlink(path)
+        except OSError:
+            pass
 
 
 def load_audio(audio_source, target_sr: int = 16000) -> tuple[np.ndarray, int]:
@@ -44,15 +85,18 @@ def load_audio(audio_source, target_sr: int = 16000) -> tuple[np.ndarray, int]:
             data, sr = sf.read(bio, dtype="float32")
         except Exception:
             # Fallback: write to temp file and try librosa
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                tmp.write(audio_bytes)
-                tmp_path = tmp.name
+            tmp_path = None
             try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                    tmp_path = tmp.name
+                    _track_temp_file(tmp_path)
+                    tmp.write(audio_bytes)
+
                 data, sr = librosa.load(tmp_path, sr=target_sr, mono=True)
+                return data.astype(np.float32), target_sr
             finally:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-            return data.astype(np.float32), target_sr
+                if tmp_path:
+                    _cleanup_temp_file(tmp_path)
     else:
         # Load directly from file path
         try:
